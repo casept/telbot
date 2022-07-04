@@ -1,6 +1,7 @@
 pub mod polling;
 
 use std::io;
+use std::time::Duration;
 
 use multipart::client::lazy::Multipart;
 pub use telbot_types as types;
@@ -11,13 +12,20 @@ use ureq::Response;
 #[derive(Clone)]
 pub struct Api {
     base_url: String,
+    timeout: Option<Duration>,
 }
 
 impl Api {
     pub fn new(token: impl AsRef<str>) -> Self {
         Self {
             base_url: format!("https://api.telegram.org/bot{}/", token.as_ref()),
+            timeout: None,
         }
+    }
+
+    /// Set the timeout for all requests sent using this API client.
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = Some(timeout);
     }
 }
 
@@ -47,7 +55,12 @@ impl Api {
     /// Send a JSON-serializable API request
     pub fn send_json<Method: JsonMethod>(&self, method: &Method) -> Result<Method::Response> {
         let value = serde_json::to_value(method)?;
-        let response = ureq::post(&format!("{}{}", self.base_url, Method::name())).send_json(value);
+        let response = match self.timeout {
+            Some(timeout) => ureq::post(&format!("{}{}", self.base_url, Method::name()))
+                .timeout(timeout)
+                .send_json(value),
+            None => ureq::post(&format!("{}{}", self.base_url, Method::name())).send_json(value),
+        };
         Self::parse_response::<Method>(response)
     }
 
@@ -72,12 +85,21 @@ impl Api {
         }
 
         let prepared = multipart.prepare().map_err(Into::<io::Error>::into)?;
-        let response = ureq::post(&format!("{}{}", self.base_url, Method::name()))
-            .set(
-                "Content-Type",
-                &format!("multipart/form-data; boundary={}", prepared.boundary()),
-            )
-            .send(prepared);
+        let response = match self.timeout {
+            Some(timeout) => ureq::post(&format!("{}{}", self.base_url, Method::name()))
+                .set(
+                    "Content-Type",
+                    &format!("multipart/form-data; boundary={}", prepared.boundary()),
+                )
+                .timeout(timeout)
+                .send(prepared),
+            None => ureq::post(&format!("{}{}", self.base_url, Method::name()))
+                .set(
+                    "Content-Type",
+                    &format!("multipart/form-data; boundary={}", prepared.boundary()),
+                )
+                .send(prepared),
+        };
         Self::parse_response::<Method>(response)
     }
 
